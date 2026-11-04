@@ -1,0 +1,6 @@
+venv/
+dataset/
+mlflow.db
+mlruns/
+__pycache__/
+.ipynb_checkpoints/
