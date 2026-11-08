@@ -7,3 +7,5 @@ __pycache__/
 alerts.db
 alerts.db
 alerts.db
+drift_report.html
+retrain_flag.json
