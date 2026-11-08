@@ -4,3 +4,6 @@ mlflow.db
 mlruns/
 __pycache__/
 .ipynb_checkpoints/
+alerts.db
+alerts.db
+alerts.db

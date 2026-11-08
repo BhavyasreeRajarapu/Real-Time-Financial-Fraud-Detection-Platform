@@ -1,18 +1,47 @@
 import json
+import sqlite3
+from datetime import datetime, timezone
+from pathlib import Path
 
 import requests
 from confluent_kafka import Consumer
 
+ROOT = Path(__file__).resolve().parent.parent
+DB_PATH = ROOT / "alerts.db"
 API_URL = "http://127.0.0.1:8000/score"
+
+db = sqlite3.connect(DB_PATH)
+db.execute("""
+CREATE TABLE IF NOT EXISTS scored (
+    kafka_partition INTEGER,
+    kafka_offset INTEGER,
+    scored_at TEXT,
+    step INTEGER,
+    type TEXT,
+    amount REAL,
+    oldbalanceOrg REAL,
+    oldbalanceDest REAL,
+    nameOrig TEXT,
+    nameDest TEXT,
+    fraud_probability REAL,
+    is_fraud INTEGER,
+    actual_fraud INTEGER,
+    status TEXT,
+    analyst_label TEXT,
+    PRIMARY KEY (kafka_partition, kafka_offset)
+)
+""")
+db.commit()
 
 consumer = Consumer({
     "bootstrap.servers": "localhost:9092",
-    "group.id": "fraud-scorer",
-    "auto.offset.reset": "earliest",   # start from the first message
+    "group.id": "fraud-scorer-db-v2",   # new group name: starts from the first message
+    "auto.offset.reset": "earliest",
+    "enable.auto.commit": False,        # never record progress, so a failed run can't skip messages
 })
 consumer.subscribe(["transactions"])
 
-total = flagged = actual_fraud = caught = false_alarms = 0
+total = inserted = flagged = 0
 empty_polls = 0
 
 while empty_polls < 5:                 # stop after about 5 seconds of silence
@@ -35,21 +64,30 @@ while empty_polls < 5:                 # stop after about 5 seconds of silence
     result = resp.json()
 
     total += 1
-    predicted = result["is_fraud"]
-    actual = tx["isFraud"] == 1
-    flagged += predicted
-    actual_fraud += actual
-    caught += predicted and actual
-    false_alarms += predicted and not actual
+    is_fraud = bool(result["is_fraud"])
+    flagged += is_fraud
 
-    print(
-        f"{total:>3} step={tx['step']} {tx['type']:<9} amount={tx['amount']:>10.0f} "
-        f"-> prob={result['fraud_probability']:.4f} flagged={predicted} actual_fraud={actual}"
+    cur = db.execute(
+        "INSERT OR IGNORE INTO scored VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        (
+            msg.partition(), msg.offset(),
+            datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            tx["step"], tx["type"], tx["amount"],
+            tx["oldbalanceOrg"], tx["oldbalanceDest"],
+            tx["nameOrig"], tx["nameDest"],
+            result["fraud_probability"], int(is_fraud), tx["isFraud"],
+            "new" if is_fraud else "none",   # case status
+            None,                            # analyst feedback label
+        ),
     )
+    db.commit()
+    inserted += cur.rowcount
 
 consumer.close()
-print("\nscored:", total)
-print("flagged:", flagged)
-print("actual fraud:", actual_fraud)
-print("fraud caught:", caught)
-print("false alarms:", false_alarms)
+rows = db.execute("SELECT COUNT(*) FROM scored").fetchone()[0]
+db.close()
+
+print("scored this run:", total)
+print("flagged this run:", flagged)
+print("new rows saved:", inserted)
+print("total rows in alerts.db:", rows)
