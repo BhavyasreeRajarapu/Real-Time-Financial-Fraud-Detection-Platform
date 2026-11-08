@@ -75,3 +75,22 @@ streamlit run src/dashboard.py
 python src/drift_report.py
 mlflow ui --backend-store-uri sqlite:///mlflow.db --port 5001
 ```
+
+## Deployment on Kubernetes (Minikube)
+
+The FastAPI scoring service is packaged as a Docker image and deployed to a local Minikube cluster.
+
+```powershell
+docker build -t fraud-api:1.0 .
+minikube start --driver=docker
+minikube image load fraud-api:1.0
+kubectl apply -f k8s/fraud-api.yaml
+kubectl get pods
+minikube service fraud-api --url
+```
+
+- `k8s/fraud-api.yaml` holds a Deployment (one replica, with readiness and liveness probes on `/health`) and a NodePort Service.
+- The image is loaded straight into Minikube (`imagePullPolicy: Never`), so no container registry is involved.
+- **Check:** through the Minikube service address, `/score` returned a fraud probability of 1 for a transfer that drains the sender's balance and 0 for an ordinary cash-out, the same as the local run.
+
+**Scope and limits:** only the scoring API is deployed to Kubernetes. Kafka runs in Docker Compose, and the Streamlit dashboard and drift report run locally. There is one replica, with no autoscaling, ingress or registry. The image runs Python 3.12 with package versions pinned in `requirements-api.txt`, copied from the development environment, which uses Python 3.14.
